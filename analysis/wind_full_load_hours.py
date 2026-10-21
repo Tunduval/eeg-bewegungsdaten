@@ -95,6 +95,23 @@ def turbines_of_year(turbines: pl.DataFrame, jahr: int) -> pl.DataFrame:
     return rows.with_columns(jahr=pl.lit(jahr, pl.Int16), status=status)
 
 
+def status_summary(years: pl.DataFrame) -> pl.DataFrame:
+    """Capacity in GW per year and site status, with a column for every status in a fixed order.
+
+    A status that no site of a year has shows 0.0. Without this, a status missing in all the years
+    is also missing as a column: before 2021 the data has only annual values, so no site is
+    "months missing", and selecting that column failed.
+    """
+    columns = [*STATUS, f"above {MAX_HOURS} h", f"below {MIN_HOURS} h"]
+    summary = (
+        years.group_by("jahr", "status")
+        .agg(gw=(pl.col("kw").sum() / 1e6).round(2))
+        .pivot("status", index="jahr", values="gw")
+    )
+    missing = [pl.lit(0.0).alias(column) for column in columns if column not in summary.columns]
+    return summary.with_columns(missing).select("jahr", pl.col(columns).fill_null(0.0)).sort("jahr")
+
+
 def per_district(turbines: pl.DataFrame) -> pl.DataFrame:
     return (
         turbines.filter(pl.col("status") == "used")
@@ -116,13 +133,7 @@ if __name__ == "__main__":
     pl.Config.set_tbl_hide_dataframe_shape(True)
     turbines = onshore_turbines()
     years = pl.concat([turbines_of_year(turbines, jahr) for jahr in range(first, last + 1)])
-    print(
-        years.group_by("jahr", "status")
-        .agg(gw=(pl.col("kw").sum() / 1e6).round(2))
-        .pivot("status", index="jahr", values="gw")
-        .select("jahr", *STATUS, f"above {MAX_HOURS} h", f"below {MIN_HOURS} h")
-        .sort("jahr")
-    )
+    print(status_summary(years))
     districts = per_district(years)
     districts.write_parquet(out)
     used = years.filter(pl.col("status") == "used")
